@@ -169,11 +169,6 @@ This is a security-critical system. All contributions must:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
-
-For security issues, contact: [security contact TBD]
-For general support: [support contact TBD]
-
 ## 🎯 Use Cases
 
 - **Security Agencies**: Verify authenticity of evidence
