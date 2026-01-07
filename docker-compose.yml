@@ -1,0 +1,161 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: deepfake-postgres
+    environment:
+      POSTGRES_DB: deepfake_db
+      POSTGRES_USER: deepfake_user
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./cloud/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepfake_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - deepfake-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: deepfake-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - deepfake-network
+
+  # API Service
+  api:
+    build:
+      context: .
+      dockerfile: cloud/Dockerfile
+    container_name: deepfake-api
+    environment:
+      DATABASE_URL: postgresql://deepfake_user:${DATABASE_PASSWORD:-changeme}@postgres:5432/deepfake_db
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      API_SECRET_KEY: ${API_SECRET_KEY:-dev-secret-key}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-jwt-secret}
+    volumes:
+      - ./cloud:/app/cloud
+      - ./models:/app/models
+      - model_storage:/app/model_storage
+      - media_storage:/app/media_storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - deepfake-network
+    restart: unless-stopped
+
+  # Celery Worker (for async tasks)
+  worker:
+    build:
+      context: .
+      dockerfile: cloud/Dockerfile
+    container_name: deepfake-worker
+    command: celery -A cloud.services.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://deepfake_user:${DATABASE_PASSWORD:-changeme}@postgres:5432/deepfake_db
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+    volumes:
+      - ./cloud:/app/cloud
+      - ./models:/app/models
+      - model_storage:/app/model_storage
+      - media_storage:/app/media_storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - deepfake-network
+    restart: unless-stopped
+
+  # Flower (Celery monitoring)
+  flower:
+    build:
+      context: .
+      dockerfile: cloud/Dockerfile
+    container_name: deepfake-flower
+    command: celery -A cloud.services.celery_app flower --port=5555
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - worker
+    networks:
+      - deepfake-network
+    restart: unless-stopped
+
+  # Prometheus (Monitoring)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: deepfake-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - deepfake-network
+    restart: unless-stopped
+
+  # Grafana (Visualization)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: deepfake-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - deepfake-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  model_storage:
+  media_storage:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  deepfake-network:
+    driver: bridge
