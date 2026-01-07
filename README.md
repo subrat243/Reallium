@@ -167,7 +167,7 @@ This is a security-critical system. All contributions must:
 
 ## 📄 License
 
-[To be determined based on deployment requirements]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🆘 Support
 
